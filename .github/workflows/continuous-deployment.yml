@@ -1,0 +1,77 @@
+name: Continuous deployment
+on:
+  workflow_run:
+    workflows: [ "Continuous integration" ]
+    branches: [ master ]
+    types:
+      - completed
+
+env:
+  NODE_VERSION: "16.x"
+  DEPLOYMENT_BRANCH: "deploy"
+
+jobs:
+  setup:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    name: Setup
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v2
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+  build:
+    name: Build
+    needs: [ setup ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Restore node_modules
+        uses: actions/cache@v2
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+
+      - name: Build
+        run: npm run build --if-present
+
+      - name: Upload distribution artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: distribution
+          path: ./dist/
+
+  deploy:
+    name: Deploy
+    needs: [ setup, build ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Download distribution artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: distribution
+          path: ./dist/
+
+      - name: Configure Git user
+        run: |
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions"
+
+      - name: Checkout as orphan branch
+        run: git checkout --orphan ${{ env.DEPLOYMENT_BRANCH }}
+
+      - name: Copy index.html to 404.html
+        run: cp ./dist/index.html ./dist/404.html
+
+      - name: Add build files to work tree
+        run: git --work-tree ./dist/ add --all
+
+      - name: Commit build files
+        run: git --work-tree ./dist/ commit -m "Continuous deployment"
+
+      - name: Push build files to deployment branch
+        run: git push origin HEAD:${{ env.DEPLOYMENT_BRANCH }} --force
